@@ -1,38 +1,28 @@
 #!/usr/bin/env python3
-"""
-astro_spots.py — Encuentra zonas oscuras accesibles en coche cerca de un origen.
-
-Requisitos:
-  pip install rasterio numpy shapely folium osmnx scikit-image matplotlib tqdm
-
-Entrada:
-  - GeoTIFF VIIRS VNL v2.* (average-masked o median-masked), p.ej. 2022/2024.
-
+""" astro_spots.py — Encuentra zonas oscuras accesibles en coche cerca de un origen.
+Requisitos: pip install rasterio numpy shapely folium osmnx scikit-image matplotlib tqdm
+Entrada: - GeoTIFF VIIRS VNL v2.* (average-masked o median-masked), p.ej. 2022/2024.
 Uso típico:
-  # 1) Ver candidatos por píxel (recomendado) sin filtrar carreteras
-  python astro_spots.py --lat 40.4168 --lon -3.7038 --radius_km 40 \
-    --viirs_path VNL.tif --out_prefix madrid_viirs --dark_thr 300 \
-    --pixel_mode --verbose
-
-  # 2) Además filtrar por carreteras cercanas (OSMnx)
-  python astro_spots.py --lat 40.4168 --lon -3.7038 --radius_km 40 \
-    --viirs_path VNL.tif --out_prefix madrid_viirs --dark_thr 300 \
-    --pixel_mode --check_drive --drive_search_m 2000 --verbose
-
+# 1) Ver candidatos por píxel (recomendado) sin filtrar carreteras
+python astro_spots.py --lat 40.4168 --lon -3.7038 --radius_km 40 \
+--viirs_path VNL.tif --out_prefix madrid_viirs --dark_thr 300 \
+--pixel_mode --verbose
+# 2) Además filtrar por carreteras cercanas (OSMnx)
+python astro_spots.py --lat 40.4168 --lon -3.7038 --radius_km 40 \
+--viirs_path VNL.tif --out_prefix madrid_viirs --dark_thr 300 \
+--pixel_mode --check_drive --drive_search_m 2000 --verbose
 Salidas:
-  - <prefix>_candidates.csv            (todos los candidatos)
-  - <prefix>_map_candidates.html       (mapa con candidatos)
-  - <prefix>_drive.csv                 (solo accesibles; si procede)
-  - <prefix>_map_drive.html            (mapa accesibles; si procede)
+- <prefix>_candidates.csv (todos los candidatos)
+- <prefix>_map_candidates.html (mapa con candidatos)
+- <prefix>_drive.csv (solo accesibles; si procede)
+- <prefix>_map_drive.html (mapa accesibles; si procede)
 """
-
 import argparse
 import math
 import os
 import csv
 import concurrent.futures
 from typing import List, Tuple
-
 import numpy as np
 import rasterio
 from rasterio.transform import rowcol, xy
@@ -40,22 +30,18 @@ from rasterio.windows import from_bounds
 from shapely.geometry import Point
 import folium
 from skimage.transform import resize
-
 # OSMnx: sólo si se pide validar accesibilidad
 try:
     import osmnx as ox
 except Exception:
     ox = None
-
 # tqdm opcional
 try:
     from tqdm import tqdm
 except ImportError:
     tqdm = None
 
-
 # ------------------ utilidades geodésicas ------------------
-
 def haversine_km(lat1, lon1, lat2, lon2):
     R = 6371.0088
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
@@ -64,17 +50,13 @@ def haversine_km(lat1, lon1, lat2, lon2):
     a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
     return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
 
-
 def deg_per_km_lat():
     return 1.0 / 110.574  # ~ km/deg lat
-
 
 def deg_per_km_lon(lat):
     return 1.0 / (111.320 * math.cos(math.radians(lat)) + 1e-12)
 
-
 # ------------------ muestreo en rejilla (modo clásico) ------------------
-
 def generate_grid(center_lat, center_lon, radius_km, step_km):
     lat_step = step_km * deg_per_km_lat()
     lat_range = int(radius_km / step_km)
@@ -86,7 +68,6 @@ def generate_grid(center_lat, center_lon, radius_km, step_km):
             lon = center_lon + j * lon_step_i
             if haversine_km(center_lat, center_lon, lat, lon) <= radius_km:
                 yield (lat, lon)
-
 
 def process_point(args_tuple):
     viirs_path, lat, lon, band, center_lat, center_lon, dark_thr = args_tuple
@@ -122,25 +103,19 @@ def process_point(args_tuple):
     except Exception:
         return None
 
-
 # ------------------ NUEVO: muestreo por píxel del raster ------------------
-
 def sample_pixels(raster, center_lat, center_lon, radius_km, band, dark_thr):
-    """
-    Recorre los píxeles VIIRS dentro del radio y devuelve candidatos oscuros.
-    Devuelve lista de tuplas: (lat, lon, radiancia, distancia_km)
-    """
+    """ Recorre los píxeles VIIRS dentro del radio y devuelve candidatos oscuros.
+    Devuelve lista de tuplas: (lat, lon, radiancia, distancia_km) """
     results = []
     # bounds en grados
     delta_deg_lat = radius_km * deg_per_km_lat()
     delta_deg_lon = radius_km * deg_per_km_lon(center_lat)
     min_lat, max_lat = center_lat - delta_deg_lat, center_lat + delta_deg_lat
     min_lon, max_lon = center_lon - delta_deg_lon, center_lon + delta_deg_lon
-
     window = from_bounds(min_lon, min_lat, max_lon, max_lat, raster.transform)
     arr = raster.read(band, window=window)
     transform = raster.window_transform(window)
-
     for row in range(arr.shape[0]):
         for col in range(arr.shape[1]):
             val = arr[row, col]
@@ -157,19 +132,18 @@ def sample_pixels(raster, center_lat, center_lon, radius_km, band, dark_thr):
                 results.append((lat, lon, float(val), dist_km))
     return results
 
-
 # ------------------ otros helpers ------------------
-
-def is_drivable_near(coord: Tuple[float, float], search_m=1200) -> bool:
-    """Comprueba si hay red de carreteras 'drive' cerca del punto (lat, lon)."""
-    if ox is None:
+def is_drivable_near(G, coord: Tuple[float, float], search_m=1200) -> bool:
+    """Comprueba si hay red de carreteras 'drive' cerca del punto (lat, lon) usando grafo pre-cargado."""
+    if G is None or ox is None:
         return False
+    lat, lon = coord
     try:
-        G = ox.graph_from_point(coord, dist=search_m, network_type="drive")
-        return len(G.nodes) > 0 and len(G.edges) > 0
+        # Encuentra el edge más cercano y su distancia en metros (great-circle)
+        _, dist = ox.distance.nearest_edges(G, lon, lat, return_dist=True)
+        return dist <= search_m
     except Exception:
-        return False
-
+        return False  # Si falla (e.g., punto fuera del grafo), asume no accesible
 
 def thin_by_distance(rows, min_sep_km):
     """Reduce puntos muy agrupados conservando primero los más oscuros y cercanos."""
@@ -186,12 +160,10 @@ def thin_by_distance(rows, min_sep_km):
             selected.append((lat, lon, rad, dist))
     return selected
 
-
 def add_viirs_overlay(m, raster, args):
     """Añade como overlay el recorte del raster para situarse visualmente."""
     import matplotlib.pyplot as plt
     import tempfile
-
     # bounds de interés
     delta_deg = args.radius_km * deg_per_km_lat()
     min_lat = args.lat - delta_deg
@@ -199,19 +171,15 @@ def add_viirs_overlay(m, raster, args):
     delta_deg_lon = args.radius_km * deg_per_km_lon(args.lat)
     min_lon = args.lon - delta_deg_lon
     max_lon = args.lon + delta_deg_lon
-
     window = from_bounds(min_lon, min_lat, max_lon, max_lat, raster.transform)
     arr = raster.read(args.band, window=window)
-
     # visual: recorte al 99p y normalización
     arr_vis = np.clip(arr, np.nanmin(arr[arr > -np.inf]), np.nanpercentile(arr, 99))
     arr_vis = arr_vis / arr_vis.max() if np.nanmax(arr_vis) > 0 else arr_vis
     arr_vis_resized = resize(arr_vis, (600, 600), preserve_range=True, anti_aliasing=True)
-
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
         plt.imsave(tmp.name, arr_vis_resized, cmap="inferno")
-        img_path = tmp.name
-
+    img_path = tmp.name
     folium.raster_layers.ImageOverlay(
         image=img_path,
         bounds=[[min_lat, min_lon], [max_lat, max_lon]],
@@ -221,7 +189,6 @@ def add_viirs_overlay(m, raster, args):
         name="Contaminación lumínica"
     ).add_to(m)
 
-
 def build_map(rows, raster, args, title_marker="Origen"):
     m = folium.Map(location=[args.lat, args.lon], zoom_start=10, control_scale=True)
     folium.Marker(
@@ -229,7 +196,6 @@ def build_map(rows, raster, args, title_marker="Origen"):
         tooltip=title_marker,
         icon=folium.Icon(icon="home"),
     ).add_to(m)
-
     # puntos (top_n)
     topN = rows[: args.top_n] if args.top_n > 0 else rows
     for i, (lat, lon, rad, dist_km) in enumerate(topN, start=1):
@@ -239,15 +205,12 @@ def build_map(rows, raster, args, title_marker="Origen"):
             tooltip=f"#{i} — {dist_km:.1f} km — {rad:.3f} nW/cm²/sr",
             fill=True,
         ).add_to(m)
-
     # overlay de VIIRS
     add_viirs_overlay(m, raster, args)
     folium.LayerControl().add_to(m)
     return m
 
-
 # ------------------ MAIN ------------------
-
 def main():
     parser = argparse.ArgumentParser(description="Buscar zonas oscuras accesibles en coche usando VIIRS + OSM.")
     parser.add_argument("--lat", type=float, required=True, help="Latitud del origen")
@@ -266,6 +229,7 @@ def main():
     parser.add_argument("--out_prefix", type=str, default="astro_spots", help="Prefijo de archivos de salida")
     parser.add_argument("--verbose", action="store_true", help="Modo detallado")
     parser.add_argument("--output_dir", type=str, default=".", help="Directorio de salida para mapas y CSV")
+    parser.add_argument("--cache_graph", action="store_true", help="Guardar/cargar grafo OSMnx en disco para reutilizar")
     args = parser.parse_args()
 
     # Crear carpeta de salida si no existe
@@ -276,7 +240,6 @@ def main():
     if not os.path.exists(args.viirs_path):
         raise FileNotFoundError(f"No existe el archivo VIIRS: {args.viirs_path}")
     raster = rasterio.open(args.viirs_path)
-
     if args.verbose:
         print("CRS del raster:", raster.crs)
         band1 = raster.read(args.band)
@@ -319,7 +282,6 @@ def main():
     if args.verbose:
         print("[DEBUG] Ordenando candidatos por oscuridad y distancia...")
     rows.sort(key=lambda x: (x[2], x[3]))  # primero más oscuro, luego más cercano
-
     if args.min_sep_km > 0:
         before = len(rows)
         rows = thin_by_distance(rows, args.min_sep_km)
@@ -348,20 +310,41 @@ def main():
             print("OSMnx no disponible; omitiendo validación de accesibilidad. Instala 'osmnx' y vuelve a ejecutar con --check_drive.")
             filtered = rows
         else:
+            G = None
+            graph_cache_path = os.path.join(args.output_dir, f"{args.out_prefix}_graph.graphml")
+            buffer_m = args.radius_km * 1000 + args.drive_search_m  # Buffer en metros para cubrir todo
+
+            if args.cache_graph and os.path.exists(graph_cache_path):
+                if args.verbose:
+                    print(f"[DEBUG] Cargando grafo cacheado desde {graph_cache_path}...")
+                G = ox.load_graphml(graph_cache_path)
+            else:
+                if args.verbose:
+                    print(f"[DEBUG] Descargando grafo grande (buffer {buffer_m}m)...")
+                try:
+                    G = ox.graph_from_point((args.lat, args.lon), dist=buffer_m, network_type="drive")
+                    if args.cache_graph:
+                        if args.verbose:
+                            print(f"[DEBUG] Guardando grafo en {graph_cache_path} para reutilizar...")
+                        ox.save_graphml(G, graph_cache_path)
+                except Exception as e:
+                    print(f"Error al descargar grafo: {e}. Omitiendo accesibilidad.")
+                    G = None
+
             if args.verbose:
                 print("[DEBUG] Validando accesibilidad (OSMnx, multitarea)...")
             filtered = []
 
-            def check_access(row):
+            def check_access(row, G):
                 lat, lon, rad, dist_km = row
-                accesible = is_drivable_near((lat, lon), search_m=args.drive_search_m)
+                accesible = is_drivable_near(G, (lat, lon), search_m=args.drive_search_m)
                 if args.verbose:
                     print(f"[DEBUG] ({lat:.5f}, {lon:.5f}) accesible={accesible}")
                 return (lat, lon, rad, dist_km) if accesible else None
 
             iterator = tqdm(rows, desc="Validando accesibilidad") if args.verbose and tqdm else rows
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                results = list(executor.map(check_access, iterator))
+                results = list(executor.map(lambda row: check_access(row, G), iterator))
             filtered = [r for r in results if r is not None]
 
             if not filtered:
@@ -375,14 +358,12 @@ def main():
                 w = csv.writer(f)
                 w.writerow(["lat", "lon", "viirs_radiance_nW_cm2_sr", "distance_km"])
                 w.writerows(filtered)
-
             # mapa de accesibles
             if args.verbose:
                 print(f"[DEBUG] Generando mapa Folium de accesibles (top {args.top_n})...")
             filtered.sort(key=lambda x: (x[2], x[3]))
-            args_drive = args  # mismo args
             html_drive = os.path.join(args.output_dir, f"{args.out_prefix}_map_drive.html")
-            m_drive = build_map(filtered, raster, args_drive, title_marker="Origen (accesibles)")
+            m_drive = build_map(filtered, raster, args, title_marker="Origen (accesibles)")
             m_drive.save(html_drive)
             print(f"Generado: {csv_drive}")
             print(f"Generado: {html_drive}")
@@ -390,7 +371,6 @@ def main():
     print(f"Generado: {csv_path}")
     print(f"Generado: {html_candidates}")
     raster.close()
-
 
 if __name__ == "__main__":
     main()
