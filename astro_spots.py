@@ -231,6 +231,9 @@ def main():
     parser.add_argument("--verbose", action="store_true", help="Modo detallado")
     parser.add_argument("--output_dir", type=str, default=".", help="Directorio de salida para mapas y CSV")
     parser.add_argument("--cache_graph", action="store_true", help="Guardar/cargar grafo OSMnx en disco para reutilizar")
+    parser.add_argument("--network_type", type=str, default="drive",
+                        choices=["drive", "walk", "all", "all_private"],
+                        help="Tipo de red OSMnx: drive (carreteras), walk (peatonal), all (todas), all_private (incluye privadas)")
     args = parser.parse_args()
 
     # Crear carpeta de salida si no existe
@@ -321,9 +324,9 @@ def main():
                 G = ox.load_graphml(graph_cache_path)
             else:
                 if args.verbose:
-                    print(f"[DEBUG] Descargando grafo grande (buffer {buffer_m}m)...")
+                    print(f"[DEBUG] Descargando grafo grande (buffer {buffer_m}m, tipo {args.network_type})...")
                 try:
-                    G = ox.graph_from_point((args.lat, args.lon), dist=buffer_m, network_type="drive")
+                    G = ox.graph_from_point((args.lat, args.lon), dist=buffer_m, network_type=args.network_type)
                     if args.cache_graph:
                         if args.verbose:
                             print(f"[DEBUG] Guardando grafo en {graph_cache_path} para reutilizar...")
