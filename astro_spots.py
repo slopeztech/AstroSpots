@@ -265,7 +265,12 @@ def main():
     parser.add_argument("--pixel_mode", action="store_true", help="Usar muestreo por píxel VIIRS (recomendado)")
     parser.add_argument("--out_prefix", type=str, default="astro_spots", help="Prefijo de archivos de salida")
     parser.add_argument("--verbose", action="store_true", help="Modo detallado")
+    parser.add_argument("--output_dir", type=str, default=".", help="Directorio de salida para mapas y CSV")
     args = parser.parse_args()
+
+    # Crear carpeta de salida si no existe
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
 
     # Abrir raster VIIRS
     if not os.path.exists(args.viirs_path):
@@ -322,7 +327,7 @@ def main():
             print(f"[DEBUG] Filtro separación {args.min_sep_km} km: {before} -> {len(rows)}")
 
     # -------- 3) Guardar CSV de candidatos --------
-    csv_path = f"{args.out_prefix}_candidates.csv"
+    csv_path = os.path.join(args.output_dir, f"{args.out_prefix}_candidates.csv")
     if args.verbose:
         print(f"[DEBUG] Guardando CSV en {csv_path} con {len(rows)} puntos...")
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
@@ -334,7 +339,7 @@ def main():
     if args.verbose:
         print(f"[DEBUG] Generando mapa Folium de candidatos (top {args.top_n})...")
     m_candidates = build_map(rows, raster, args, title_marker="Origen")
-    html_candidates = f"{args.out_prefix}_map_candidates.html"
+    html_candidates = os.path.join(args.output_dir, f"{args.out_prefix}_map_candidates.html")
     m_candidates.save(html_candidates)
 
     # -------- 5) (Opcional) Filtrado por accesibilidad drive --------
@@ -365,7 +370,7 @@ def main():
 
         # Guardar CSV y mapa de accesibles si hay
         if filtered:
-            csv_drive = f"{args.out_prefix}_drive.csv"
+            csv_drive = os.path.join(args.output_dir, f"{args.out_prefix}_drive.csv")
             with open(csv_drive, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
                 w.writerow(["lat", "lon", "viirs_radiance_nW_cm2_sr", "distance_km"])
@@ -376,8 +381,8 @@ def main():
                 print(f"[DEBUG] Generando mapa Folium de accesibles (top {args.top_n})...")
             filtered.sort(key=lambda x: (x[2], x[3]))
             args_drive = args  # mismo args
+            html_drive = os.path.join(args.output_dir, f"{args.out_prefix}_map_drive.html")
             m_drive = build_map(filtered, raster, args_drive, title_marker="Origen (accesibles)")
-            html_drive = f"{args.out_prefix}_map_drive.html"
             m_drive.save(html_drive)
             print(f"Generado: {csv_drive}")
             print(f"Generado: {html_drive}")
