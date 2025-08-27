@@ -22,6 +22,7 @@ import math
 import os
 import csv
 import concurrent.futures
+import functools
 from typing import List, Tuple
 import numpy as np
 import rasterio
@@ -332,19 +333,13 @@ def main():
                     G = None
 
             if args.verbose:
-                print("[DEBUG] Validando accesibilidad (OSMnx, multitarea)...")
+                print("[DEBUG] Validando accesibilidad (OSMnx, multiproceso)...")
             filtered = []
 
-            def check_access(row, G):
-                lat, lon, rad, dist_km = row
-                accesible = is_drivable_near(G, (lat, lon), search_m=args.drive_search_m)
-                if args.verbose:
-                    print(f"[DEBUG] ({lat:.5f}, {lon:.5f}) accesible={accesible}")
-                return (lat, lon, rad, dist_km) if accesible else None
-
             iterator = tqdm(rows, desc="Validando accesibilidad") if args.verbose and tqdm else rows
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                results = list(executor.map(lambda row: check_access(row, G), iterator))
+            args_list = [(row, graph_cache_path, args.drive_search_m) for row in iterator]
+            with concurrent.futures.ProcessPoolExecutor() as executor:
+                results = list(executor.map(check_access, args_list))
             filtered = [r for r in results if r is not None]
 
             if not filtered:
@@ -371,6 +366,16 @@ def main():
     print(f"Generado: {csv_path}")
     print(f"Generado: {html_candidates}")
     raster.close()
+
+def check_access(args_tuple):
+    row, graph_data, drive_search_m = args_tuple
+    lat, lon, rad, dist_km = row
+    import osmnx as ox
+    try:
+        G = ox.load_graphml(graph_data)
+    except Exception:
+        G = None
+    return (lat, lon, rad, dist_km) if is_drivable_near(G, (lat, lon), search_m=drive_search_m) else None
 
 if __name__ == "__main__":
     main()
