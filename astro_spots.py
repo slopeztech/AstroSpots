@@ -229,7 +229,7 @@ def build_map(rows, raster, args, title_marker="Origin", show_road_distance=Fals
 
 # ------------------ MAIN ------------------
 def main():
-    parser = argparse.ArgumentParser(description="Find dark zones accessible by car using VIIRS + OSM.")
+    parser = argparse.ArgumentParser(description="Find dark zones using VIIRS + OSM.")
     parser.add_argument("--lat", type=float, required=True, help="Latitude of the origin")
     parser.add_argument("--lon", type=float, required=True, help="Longitude of the origin")
     parser.add_argument("--radius_km", type=float, default=25, help="Search radius in km (default 25)")
@@ -248,8 +248,8 @@ def main():
     parser.add_argument("--output_dir", type=str, default=".", help="Output directory for maps and CSV")
     parser.add_argument("--cache_graph", action="store_true", help="Save/load OSMnx graph to/from disk for reuse")
     parser.add_argument("--network_type", type=str, default="drive",
-                        choices=["drive", "walk", "all", "all_private"],
-                        help="OSMnx network type: drive (roads), walk (pedestrian), all (all), all_private (includes private)")
+                        choices=["drive", "walk", "all"],
+                        help="OSMnx network type: drive (roads), walk (pedestrian), all (all)")
     args = parser.parse_args()
 
     # Create output directory if it doesn't exist
