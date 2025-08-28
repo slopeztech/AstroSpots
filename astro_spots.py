@@ -17,6 +17,7 @@ Outputs:
 - <prefix>_drive.csv (only accessible; if applicable)
 - <prefix>_map_drive.html (map of accessible; if applicable)
 """
+
 import argparse
 import math
 import os
@@ -30,6 +31,7 @@ from shapely.geometry import Point
 import folium
 from skimage.transform import resize
 import logging
+
 
 # OSMnx: only if validating accessibility
 try:
