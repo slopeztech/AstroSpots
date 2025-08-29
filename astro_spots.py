@@ -213,14 +213,31 @@ def build_map(rows, raster, args, title_marker="Origin", show_road_distance=Fals
         if show_road_distance and len(row) == 5:
             lat, lon, rad, dist_km, dist_road = row
             tooltip = f"#{i} — {dist_road:.6f} m to road — {rad:.3f} nW/cm²/sr"  # Increased precision
+            popup_html = f"""
+            <b>#{i} — Distance to road: {dist_road:.6f} m</b><br>
+            Radiance: {rad:.3f} nW/cm²/sr<br>
+            Distance from origin: {dist_km:.1f} km<br>
+            <ul>
+            <li><a href="https://www.google.com/maps/search/?api=1&query={lat},{lon}" target="_blank">Abrir en Google Maps</a></li>
+            </ul>
+            """
         else:
             lat, lon, rad, dist_km = row[:4]
             tooltip = f"#{i} — {dist_km:.1f} km from origin — {rad:.3f} nW/cm²/sr"
+            popup_html = f"""
+            <b>#{i}</b><br>
+            Radiance: {rad:.3f} nW/cm²/sr<br>
+            Distance from origin: {dist_km:.1f} km<br>
+            <ul>
+            <li><a href="https://www.google.com/maps/search/?api=1&query={lat},{lon}" target="_blank">Abrir en Google Maps</a></li>
+            </ul>
+            """
         folium.CircleMarker(
             [lat, lon],
             radius=6,
             tooltip=tooltip,
             fill=True,
+            popup=popup_html,
         ).add_to(m)
     # VIIRS overlay
     add_viirs_overlay(m, raster, args)
