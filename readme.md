@@ -14,12 +14,12 @@ This tool is ideal for astronomers, astrophotographers, or anyone seeking dark s
 - **Outputs**: CSV files with candidate points and interactive Folium maps (HTML) for visualization.
 - **Customizable**: Adjust radius, darkness threshold, road search distance, and more.
 
-Data Source: VIIRS VNL v2 (average-masked or median-masked GeoTIFF, e.g., from 2022/2024). Download from [NASA Earthdata](https://earthdata.nasa.gov/) or similar sources.
+Data Source: VIIRS VNL v2 (average-masked or median-masked GeoTIFF, e.g. 2024). Download from [NASA Earthdata](https://earthdata.nasa.gov/), [Earth Observation Group](https://eogdata.mines.edu/products/vnl/) or similar sources.
 
 ## Requirements
 
 - Python 3.6+
-- Required packages: `pip install rasterio numpy shapely folium osmnx scikit-image matplotlib tqdm`
+- Required packages: `rasterio numpy shapely folium osmnx scikit-image matplotlib tqdm`
 
 Note: OSMnx is optional but required for `--check_drive` mode.
 
@@ -34,7 +34,6 @@ Note: OSMnx is optional but required for `--check_drive` mode.
 
    pip install -r requirements.txt
 
-(Create a `requirements.txt` with the packages listed above if not present.)
 
 3. Download a VIIRS GeoTIFF file (e.g., `VNL_npp_2024_global_vcmslcfg_v2_c202502261200.average.dat.tif`) and place it in your working directory.
 
@@ -87,7 +86,7 @@ Open HTML maps in a web browser to view interactive results with VIIRS overlay.
 
 ## Example
 
-For Madrid (lat 40.4168, lon -3.7038), running with a 40km radius and dark_thr=300 might yield dark spots in nearby rural areas, filtered for road access.
+(lat 42, lon -2), running with a 40km radius and dark_thr=0.500 might yield dark spots in nearby rural areas, filtered for road access.
 
 ## Troubleshooting
 
@@ -102,7 +101,7 @@ Contributions welcome! Fork the repo, make changes, and submit a pull request. I
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+No license. Just enjoy.
 
 ## Acknowledgments
 
