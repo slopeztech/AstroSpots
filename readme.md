@@ -86,7 +86,9 @@ Open HTML maps in a web browser to view interactive results with VIIRS overlay.
 
 ## Example
 
-(lat 42, lon -2), running with a 40km radius and dark_thr=0.500 might yield dark spots in nearby rural areas, filtered for road access.
+(lat 40.92, lon -2.39), running with a 20km radius and dark_thr=0.400 might yield dark spots in nearby rural areas, filtered for road access.
+
+    python astro_spots.py --lat 40.921800000 --lon -2.392711900 --radius_km 20 --viirs_path .\VNL_npp_2024_global_vcmslcfg_v2_c202502261200.average.dat.tif --out_prefix sotodosos_viirs2025 --dark_thr 0.400 --pixel_mode --check_drive --drive_search_m 100 --verbose --top_n 0 --network_type walk --cache_graph
 
 ## Troubleshooting
 
