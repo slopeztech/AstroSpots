@@ -148,8 +148,12 @@ def is_drivable_near(G, coord: Tuple[float, float], search_m=150) -> Tuple[bool,
         return False, float('inf')
     lat, lon = coord
     try:
-        # Find the nearest edge and its distance in meters (great-circle)
-        nearest_data, dist = ox.distance.nearest_edges(G, lon, lat, return_dist=True)
+        # Project the point to the graph's CRS
+        point = Point(lon, lat)
+        proj_point, proj_crs = ox.projection.project_geometry(point, crs='epsg:4326', to_crs=G.graph['crs'])
+        x, y = proj_point.x, proj_point.y
+        # Find nearest edge and distance in the projected graph
+        nearest_data, dist = ox.distance.nearest_edges(G, x, y, return_dist=True)
         logging.debug(f"Nearest edge distance for {lat}, {lon}: {dist} m")
         return dist <= search_m, dist if dist is not None else float('inf')
     except Exception as e:
@@ -371,10 +375,15 @@ def main():
                 print("Graph not available; skipping accessibility validation.")
                 filtered = rows
             else:
+                # Project the graph for accurate Euclidean distance calculations
+                if args.verbose:
+                    print("[DEBUG] Projecting graph to local UTM for accurate distances...")
+                G = ox.project_graph(G)
+
                 if args.verbose:
                     print("[DEBUG] Validating accessibility (sequential)...")
                 filtered = []
-                iterator = rows if args.verbose and tqdm else rows
+                iterator = tqdm(rows) if args.verbose and tqdm else rows
                 for row in iterator:
                     lat, lon, rad, dist_km = row
                     accessible, dist_road = is_drivable_near(G, (lat, lon), search_m=args.drive_search_m)
