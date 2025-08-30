@@ -1,6 +1,6 @@
 # Astro Spots: Find Accessible Dark Sky Zones
 
-<!-- Replace with an actual screenshot or demo image if available -->
+![Astro Spots Demo](screenshot.jpg)
 
 ## Overview
 
