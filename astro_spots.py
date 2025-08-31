@@ -11,11 +11,15 @@ python astro_spots.py --lat 40.4168 --lon -3.7038 --radius_km 40 \
 python astro_spots.py --lat 40.4168 --lon -3.7038 --radius_km 40 \
 --viirs_path VNL.tif --out_prefix madrid_viirs --dark_thr 300 \
 --pixel_mode --check_drive --drive_search_m 2000 --verbose
+# 3) Include all points of interest with any 'amenity', 'tourism', or 'leisure' tag within the radius
+python astro_spots.py --lat 40.4168 --lon -3.7038 --radius_km 40 \
+--viirs_path VNL.tif --out_prefix madrid_viirs --dark_thr 300 \
+--pixel_mode --pois all --verbose
 Outputs:
 - <prefix>_candidates.csv (all candidates)
-- <prefix>_map_candidates.html (map with candidates)
+- <prefix>_map_candidates.html (map with candidates and POIs)
 - <prefix>_drive.csv (only accessible; if applicable)
-- <prefix>_map_drive.html (map of accessible; if applicable)
+- <prefix>_map_drive.html (map of accessible with POIs; if applicable)
 """
 
 import argparse
@@ -32,10 +36,13 @@ import folium
 from skimage.transform import resize
 import logging
 
-
-# OSMnx: only if validating accessibility
+# OSMnx: only if validating accessibility or fetching POIs
 try:
     import osmnx as ox
+    # Check OSMnx version for compatibility
+    import pkg_resources
+    osmnx_version = pkg_resources.get_distribution("osmnx").version
+    logging.info(f"Using OSMnx version {osmnx_version}")
 except Exception:
     ox = None
 # tqdm optional
@@ -139,6 +146,78 @@ def sample_pixels(raster, center_lat, center_lon, radius_km, band, dark_thr):
                 results.append((lat, lon, float(val), dist_km))
     return results
 
+# ------------------ NEW: Fetch Points of Interest ------------------
+def fetch_pois(center_lat, center_lon, radius_km, poi_type):
+    """Fetch points of interest from OSM within the radius using osmnx."""
+    if ox is None:
+        logging.warning("OSMnx not available; cannot fetch POIs. Install 'osmnx' to use --pois.")
+        return []
+    
+    try:
+        # Convert radius to meters for OSMnx
+        dist_m = radius_km * 1000
+        # Define tags based on poi_type
+        if poi_type.lower() == 'all':
+            # Fetch all features with 'amenity', 'tourism', or 'leisure' tags
+            tags = {
+                'amenity': True,  # Any amenity (e.g., park, observatory, place_of_worship)
+                'tourism': True,  # Any tourism feature (e.g., viewpoint, attraction)
+                'leisure': True    # Any leisure feature (e.g., nature_reserve, park)
+            }
+        elif '=' in poi_type:
+            # Custom key=value pair (e.g., amenity=park)
+            key, value = poi_type.split('=', 1)
+            tags = {key: value}
+        else:
+            # Assume poi_type is an amenity value (e.g., observatory)
+            tags = {'amenity': poi_type}
+        
+        # Fetch geometries from OSM (compatible with OSMnx v1.x and v2.x)
+        if hasattr(ox, 'features') and hasattr(ox.features, 'features_from_point'):
+            # For newer versions (v2.x)
+            gdf = ox.features.features_from_point((center_lat, center_lon), tags=tags, dist=dist_m)
+        else:
+            # For older versions (v1.x or earlier), fallback to geometries_from_point if available
+            if hasattr(ox, 'geometries_from_point'):
+                gdf = ox.geometries_from_point((center_lat, center_lon), tags=tags, dist=dist_m)
+            else:
+                raise AttributeError("OSMnx version does not support POI fetching. Please update to v1.2+.")
+        
+        pois = []
+        for _, row in gdf.iterrows():
+            # Get geometry (centroid for polygons)
+            geom = row['geometry']
+            if geom.geom_type == 'Point':
+                lon, lat = geom.x, geom.y
+            else:
+                lon, lat = geom.centroid.x, geom.centroid.y
+            
+            # Check if within radius
+            dist_km = haversine_km(center_lat, center_lon, lat, lon)
+            if dist_km <= radius_km:
+                # Get label (try 'name', then specific tag, then default to 'POI')
+                label = row.get('name', None)
+                if not label or not isinstance(label, str) or not label.strip():
+                    # Try the tag value for the relevant key
+                    for key in ['amenity', 'tourism', 'leisure']:
+                        if key in row and isinstance(row[key], str) and row[key].strip():
+                            label = row[key]
+                            break
+                    else:
+                        label = 'POI'
+                pois.append((lat, lon, label, dist_km))
+        
+        if not pois:
+            logging.info(f"No POIs of type '{poi_type}' found within {radius_km} km.")
+        else:
+            logging.info(f"Found {len(pois)} POIs of type '{poi_type}' within {radius_km} km.")
+        
+        return pois
+    
+    except Exception as e:
+        logging.error(f"Error fetching POIs: {e}")
+        return []
+
 # ------------------ Other helpers ------------------
 def is_drivable_near(G, coord: Tuple[float, float], search_m=150) -> Tuple[bool, float]:
     """Checks if there is a 'drive' road network near the point (lat, lon) using a pre-loaded graph.
@@ -216,7 +295,7 @@ def build_map(rows, raster, args, title_marker="Origin", show_road_distance=Fals
     for i, row in enumerate(topN, start=1):
         if show_road_distance and len(row) == 5:
             lat, lon, rad, dist_km, dist_road = row
-            tooltip = f"#{i} — {dist_road:.6f} m to road — {rad:.3f} nW/cm²/sr"  # Increased precision
+            tooltip = f"#{i} — {dist_road:.6f} m to road — {rad:.3f} nW/cm²/sr"
             popup_html = f"""
             <b>#{i} — Distance to road: {dist_road:.6f} m</b><br>
             Radiance: {rad:.3f} nW/cm²/sr<br>
@@ -243,6 +322,26 @@ def build_map(rows, raster, args, title_marker="Origin", show_road_distance=Fals
             fill=True,
             popup=popup_html,
         ).add_to(m)
+
+    # Add points of interest if --pois is specified
+    if args.pois:
+        pois = fetch_pois(args.lat, args.lon, args.radius_km, args.pois)
+        for poi_lat, poi_lon, poi_label, dist_km in pois:
+            tooltip = f"{poi_label} — {dist_km:.1f} km from origin"
+            popup_html = f"""
+            <b>{poi_label}</b><br>
+            Distance from origin: {dist_km:.1f} km<br>
+            <ul>
+            <li><a href="https://www.google.com/maps/search/?api=1&query={poi_lat},{poi_lon}" target="_blank">Open in Google Maps</a></li>
+            </ul>
+            """
+            folium.Marker(
+                [poi_lat, poi_lon],
+                tooltip=tooltip,
+                popup=popup_html,
+                icon=folium.Icon(color='green', icon='star'),
+            ).add_to(m)
+
     # VIIRS overlay
     add_viirs_overlay(m, raster, args)
     folium.LayerControl().add_to(m)
@@ -271,6 +370,9 @@ def main():
     parser.add_argument("--network_type", type=str, default="drive",
                         choices=["drive", "walk", "all"],
                         help="OSMnx network type: drive (roads), walk (pedestrian), all (all)")
+    parser.add_argument("--pois", type=str, default=None,
+                        help="Type of points of interest to fetch from OSM within the radius (e.g., 'observatory', 'park', 'amenity=place_of_worship', 'all' for all amenities/tourism/leisure). Requires OSMnx.")
+
     args = parser.parse_args()
 
     # Create output directory if it doesn't exist
@@ -345,10 +447,10 @@ def main():
     m_candidates.save(html_candidates)
 
     # -------- 5) (Optional) Drive accessibility filtering --------
+    filtered = rows  # Default to all rows if no check_drive
     if args.check_drive:
         if ox is None:
             print("OSMnx not available; skipping accessibility validation. Install 'osmnx' and rerun with --check_drive.")
-            filtered = rows
         else:
             G = None
             graph_cache_path = os.path.join(args.output_dir, f"{args.out_prefix}_graph.graphml")
@@ -373,7 +475,6 @@ def main():
 
             if G is None:
                 print("Graph not available; skipping accessibility validation.")
-                filtered = rows
             else:
                 # Project the graph for accurate Euclidean distance calculations
                 if args.verbose:
@@ -397,7 +498,7 @@ def main():
                     print("No points with nearby roads within the selected radius.")
 
         # Save CSV and map of accessible points if any
-        if filtered:
+        if len(filtered) > 0 and filtered != rows:  # Only if filtered differently
             csv_drive = os.path.join(args.output_dir, f"{args.out_prefix}_drive.csv")
             with open(csv_drive, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
