@@ -222,7 +222,7 @@ def build_map(rows, raster, args, title_marker="Origin", show_road_distance=Fals
             Radiance: {rad:.3f} nW/cm²/sr<br>
             Distance from origin: {dist_km:.1f} km<br>
             <ul>
-            <li><a href="https://www.google.com/maps/search/?api=1&query={lat},{lon}" target="_blank">Abrir en Google Maps</a></li>
+            <li><a href="https://www.google.com/maps/search/?api=1&query={lat},{lon}" target="_blank">Open in Google Maps</a></li>
             </ul>
             """
         else:
@@ -233,7 +233,7 @@ def build_map(rows, raster, args, title_marker="Origin", show_road_distance=Fals
             Radiance: {rad:.3f} nW/cm²/sr<br>
             Distance from origin: {dist_km:.1f} km<br>
             <ul>
-            <li><a href="https://www.google.com/maps/search/?api=1&query={lat},{lon}" target="_blank">Abrir en Google Maps</a></li>
+            <li><a href="https://www.google.com/maps/search/?api=1&query={lat},{lon}" target="_blank">Open in Google Maps</a></li>
             </ul>
             """
         folium.CircleMarker(
