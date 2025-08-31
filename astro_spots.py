@@ -35,13 +35,17 @@ from shapely.geometry import Point
 import folium
 from skimage.transform import resize
 import logging
+try:
+    import importlib.metadata as importlib_metadata
+except ImportError:
+    # For Python < 3.8
+    import importlib_metadata
 
 # OSMnx: only if validating accessibility or fetching POIs
 try:
     import osmnx as ox
     # Check OSMnx version for compatibility
-    import pkg_resources
-    osmnx_version = pkg_resources.get_distribution("osmnx").version
+    osmnx_version = importlib_metadata.version("osmnx")
     logging.info(f"Using OSMnx version {osmnx_version}")
 except Exception:
     ox = None
@@ -172,16 +176,13 @@ def fetch_pois(center_lat, center_lon, radius_km, poi_type):
             # Assume poi_type is an amenity value (e.g., observatory)
             tags = {'amenity': poi_type}
         
-        # Fetch geometries from OSM (compatible with OSMnx v1.x and v2.x)
-        if hasattr(ox, 'features') and hasattr(ox.features, 'features_from_point'):
-            # For newer versions (v2.x)
+        # Fetch geometries from OSM
+        try:
+            # Try newer OSMnx versions (2.0.0+) first
             gdf = ox.features.features_from_point((center_lat, center_lon), tags=tags, dist=dist_m)
-        else:
-            # For older versions (v1.x or earlier), fallback to geometries_from_point if available
-            if hasattr(ox, 'geometries_from_point'):
-                gdf = ox.geometries_from_point((center_lat, center_lon), tags=tags, dist=dist_m)
-            else:
-                raise AttributeError("OSMnx version does not support POI fetching. Please update to v1.2+.")
+        except AttributeError:
+            # Fallback to older OSMnx versions (1.2.0+)
+            gdf = ox.geometries_from_point((center_lat, center_lon), tags=tags, dist=dist_m)
         
         pois = []
         for _, row in gdf.iterrows():
@@ -290,7 +291,10 @@ def build_map(rows, raster, args, title_marker="Origin", show_road_distance=Fals
         tooltip=title_marker,
         icon=folium.Icon(icon="home"),
     ).add_to(m)
-    # Points (top_n)
+    
+    # Create a FeatureGroup for dark sky candidates
+    candidates_group = folium.FeatureGroup(name="Dark Sky Candidates").add_to(m)
+    # Points (top_n) reverted to original CircleMarker
     topN = rows[: args.top_n] if args.top_n > 0 else rows
     for i, row in enumerate(topN, start=1):
         if show_road_distance and len(row) == 5:
@@ -320,11 +324,15 @@ def build_map(rows, raster, args, title_marker="Origin", show_road_distance=Fals
             radius=6,
             tooltip=tooltip,
             fill=True,
-            popup=popup_html,
-        ).add_to(m)
+            color='blue',
+            fill_color='blue',
+            fill_opacity=0.6,
+            popup=folium.Popup(popup_html, max_width=250),
+        ).add_to(candidates_group)
 
-    # Add points of interest if --pois is specified
+    # Add points of interest if --pois is specified, in a separate FeatureGroup
     if args.pois:
+        poi_group = folium.FeatureGroup(name="Points of Interest").add_to(m)
         pois = fetch_pois(args.lat, args.lon, args.radius_km, args.pois)
         for poi_lat, poi_lon, poi_label, dist_km in pois:
             tooltip = f"{poi_label} — {dist_km:.1f} km from origin"
@@ -335,12 +343,19 @@ def build_map(rows, raster, args, title_marker="Origin", show_road_distance=Fals
             <li><a href="https://www.google.com/maps/search/?api=1&query={poi_lat},{poi_lon}" target="_blank">Open in Google Maps</a></li>
             </ul>
             """
-            folium.Marker(
+            # Create a golden square POI marker
+            poi_marker = folium.RegularPolygonMarker(
                 [poi_lat, poi_lon],
+                number_of_sides=4,
+                radius=6,  # Match circle radius
+                rotation=45,  # Rotate 45 degrees for a diamond-like square appearance
+                fill_color='#FFD700',  # Golden color
+                color='#FFD700',
+                fill_opacity=0.8,
                 tooltip=tooltip,
-                popup=popup_html,
-                icon=folium.Icon(color='green', icon='star'),
-            ).add_to(m)
+                popup=folium.Popup(popup_html, max_width=250),
+            )
+            poi_group.add_child(poi_marker)
 
     # VIIRS overlay
     add_viirs_overlay(m, raster, args)
@@ -447,10 +462,10 @@ def main():
     m_candidates.save(html_candidates)
 
     # -------- 5) (Optional) Drive accessibility filtering --------
-    filtered = rows  # Default to all rows if no check_drive
     if args.check_drive:
         if ox is None:
             print("OSMnx not available; skipping accessibility validation. Install 'osmnx' and rerun with --check_drive.")
+            filtered = rows
         else:
             G = None
             graph_cache_path = os.path.join(args.output_dir, f"{args.out_prefix}_graph.graphml")
@@ -475,6 +490,7 @@ def main():
 
             if G is None:
                 print("Graph not available; skipping accessibility validation.")
+                filtered = rows
             else:
                 # Project the graph for accurate Euclidean distance calculations
                 if args.verbose:
@@ -498,7 +514,7 @@ def main():
                     print("No points with nearby roads within the selected radius.")
 
         # Save CSV and map of accessible points if any
-        if len(filtered) > 0 and filtered != rows:  # Only if filtered differently
+        if filtered:
             csv_drive = os.path.join(args.output_dir, f"{args.out_prefix}_drive.csv")
             with open(csv_drive, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
