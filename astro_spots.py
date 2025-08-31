@@ -35,6 +35,8 @@ from shapely.geometry import Point
 import folium
 from skimage.transform import resize
 import logging
+import requests
+from functools import lru_cache
 try:
     import importlib.metadata as importlib_metadata
 except ImportError:
@@ -284,6 +286,89 @@ def add_viirs_overlay(m, raster, args):
         name="Light pollution"
     ).add_to(m)
 
+def get_weather_data(lat: float, lon: float, cache: dict, verbose: bool = False) -> str:
+    """Fetch weather data from 7timer and Open-Meteo APIs for a given lat, lon.
+    Returns formatted HTML string for the popup. Uses cache to avoid redundant API calls."""
+    # Round coordinates to reduce redundant API calls (e.g., to 3 decimal places ~100m)
+    cache_key = (round(lat, 3), round(lon, 3))
+    if cache_key in cache:
+        if verbose:
+            logging.info(f"Using cached weather data for {lat}, {lon}")
+        return cache[cache_key]
+
+    try:
+        # 7timer API for astronomy-specific weather (cloud cover, seeing, transparency)
+        url_7timer = f"http://www.7timer.info/bin/astro.php?lon={lon}&lat={lat}&ac=0&unit=metric&output=json&tzshift=0"
+        r_7timer = requests.get(url_7timer, timeout=5).json()
+        data_7timer = r_7timer.get("dataseries", [])[:3]  # Next 3 intervals (~3 days)
+
+        # Open-Meteo API for general weather (temperature, wind, precipitation)
+        url_openmeteo = (
+            f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
+            "&current=temperature_2m,wind_speed_10m,cloud_cover"
+            "&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max"
+            "&forecast_days=3&timezone=auto"
+        )
+        r_openmeteo = requests.get(url_openmeteo, timeout=5).json()
+        current_weather = r_openmeteo.get("current", {})
+        daily_forecast = r_openmeteo.get("daily", {})
+
+        # Format weather data into HTML
+        html = "<h4>Weather Information</h4>"
+
+        # Current Weather (Open-Meteo)
+        if current_weather:
+            html += "<b>Current Weather:</b><br><ul>"
+            html += f"<li>Temperature: {current_weather.get('temperature_2m', 'N/A')}°C</li>"
+            html += f"<li>Wind Speed: {current_weather.get('wind_speed_10m', 'N/A')} km/h</li>"
+            html += f"<li>Cloud Cover: {current_weather.get('cloud_cover', 'N/A')}%</li>"
+            html += "</ul>"
+
+        # Astronomy Forecast (7timer)
+        if data_7timer:
+            html += "<b>Astronomy Forecast (Next 3 Intervals):</b><br>"
+            for d in data_7timer:
+                timepoint = d.get('timepoint', 'N/A')
+                cloudcover = d.get('cloudcover', 'N/A')  # 1-9 scale
+                seeing = d.get('seeing', 'N/A')  # 1-8 scale (lower is better)
+                transparency = d.get('transparency', 'N/A')  # 1-8 scale (lower is better)
+                temp = d.get('temp2m', 'N/A')
+                wind = d.get('wind10m', {})
+                wind_dir = wind.get('direction', 'N/A')
+                wind_speed = wind.get('speed', 'N/A')
+                prec_type = d.get('prec_type', 'N/A')
+                html += f"<b>Interval +{timepoint}h:</b><br><ul>"
+                html += f"<li>Cloud Cover: {cloudcover}/9</li>"
+                html += f"<li>Seeing: {seeing}/8 (lower is better)</li>"
+                html += f"<li>Transparency: {transparency}/8 (lower is better)</li>"
+                html += f"<li>Temperature: {temp}°C</li>"
+                html += f"<li>Wind: {wind_dir} {wind_speed} m/s</li>"
+                html += f"<li>Precipitation: {prec_type.capitalize()}</li>"
+                html += "</ul>"
+
+        # Daily Forecast (Open-Meteo)
+        if daily_forecast and "time" in daily_forecast:
+            html += "<b>3-Day Daily Forecast:</b><br>"
+            for i, day in enumerate(daily_forecast["time"][:3]):
+                t_max = daily_forecast.get("temperature_2m_max", [])[i]
+                t_min = daily_forecast.get("temperature_2m_min", [])[i]
+                precip = daily_forecast.get("precipitation_sum", [])[i]
+                wind_max = daily_forecast.get("wind_speed_10m_max", [])[i]
+                html += f"<b>{day}:</b><br><ul>"
+                html += f"<li>Temp Max/Min: {t_max}°C / {t_min}°C</li>"
+                html += f"<li>Precipitation: {precip} mm</li>"
+                html += f"<li>Max Wind Speed: {wind_max} km/h</li>"
+                html += "</ul>"
+
+        cache[cache_key] = html
+        return html
+
+    except Exception as e:
+        logging.error(f"Error fetching weather for {lat}, {lon}: {e}")
+        html = "<b>Weather Information:</b><br><i>Unable to fetch weather data.</i>"
+        cache[cache_key] = html
+        return html
+
 def build_map(rows, raster, args, title_marker="Origin", show_road_distance=False):
     m = folium.Map(location=[args.lat, args.lon], zoom_start=10, control_scale=True)
     folium.Marker(
@@ -291,7 +376,10 @@ def build_map(rows, raster, args, title_marker="Origin", show_road_distance=Fals
         tooltip=title_marker,
         icon=folium.Icon(icon="home"),
     ).add_to(m)
-    
+
+    # Initialize weather cache
+    weather_cache = {}
+
     # Create a FeatureGroup for dark sky candidates
     candidates_group = folium.FeatureGroup(name="Dark Sky Candidates").add_to(m)
     # Points (top_n) reverted to original CircleMarker
@@ -299,9 +387,9 @@ def build_map(rows, raster, args, title_marker="Origin", show_road_distance=Fals
     for i, row in enumerate(topN, start=1):
         if show_road_distance and len(row) == 5:
             lat, lon, rad, dist_km, dist_road = row
-            tooltip = f"#{i} — {dist_road:.6f} m to road — {rad:.3f} nW/cm²/sr"
+            tooltip = f"#{i} — {dist_road:.1f} m to road — {rad:.3f} nW/cm²/sr"
             popup_html = f"""
-            <b>#{i} — Distance to road: {dist_road:.6f} m</b><br>
+            <b>#{i} — Distance to road: {dist_road:.1f} m</b><br>
             Radiance: {rad:.3f} nW/cm²/sr<br>
             Distance from origin: {dist_km:.1f} km<br>
             <ul>
@@ -319,6 +407,8 @@ def build_map(rows, raster, args, title_marker="Origin", show_road_distance=Fals
             <li><a href="https://www.google.com/maps/search/?api=1&query={lat},{lon}" target="_blank">Open in Google Maps</a></li>
             </ul>
             """
+        # Add weather data
+        popup_html += get_weather_data(lat, lon, weather_cache, args.verbose)
         folium.CircleMarker(
             [lat, lon],
             radius=6,
@@ -327,7 +417,7 @@ def build_map(rows, raster, args, title_marker="Origin", show_road_distance=Fals
             color='blue',
             fill_color='blue',
             fill_opacity=0.6,
-            popup=folium.Popup(popup_html, max_width=250),
+            popup=folium.Popup(popup_html, max_width=350),  # Increased max_width for readability
         ).add_to(candidates_group)
 
     # Add points of interest if --pois is specified, in a separate FeatureGroup
@@ -343,6 +433,8 @@ def build_map(rows, raster, args, title_marker="Origin", show_road_distance=Fals
             <li><a href="https://www.google.com/maps/search/?api=1&query={poi_lat},{poi_lon}" target="_blank">Open in Google Maps</a></li>
             </ul>
             """
+            # Add weather data
+            popup_html += get_weather_data(poi_lat, poi_lon, weather_cache, args.verbose)
             # Create a golden square POI marker
             poi_marker = folium.RegularPolygonMarker(
                 [poi_lat, poi_lon],
@@ -353,7 +445,7 @@ def build_map(rows, raster, args, title_marker="Origin", show_road_distance=Fals
                 color='#FFD700',
                 fill_opacity=0.8,
                 tooltip=tooltip,
-                popup=folium.Popup(popup_html, max_width=250),
+                popup=folium.Popup(popup_html, max_width=350),  # Increased max_width
             )
             poi_group.add_child(poi_marker)
 
